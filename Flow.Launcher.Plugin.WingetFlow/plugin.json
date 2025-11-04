@@ -1,0 +1,12 @@
+{
+  "ID": "E5A9A70E28DC4AB08F921C4D026C97E0",
+  "ActionKeyword": "wg",
+  "Name": "WingetFlow",
+  "Description": "A plugin to install and update packages with Winget",
+  "Author": "gdemazeux",
+  "Version": "0.1.0",
+  "Language": "csharp",
+  "Website": "https://github.com/gdemazeux/WingetFlow",
+  "IcoPath": "images\\app.png",
+  "ExecuteFileName": "Flow.Launcher.Plugin.WingetFlow.dll"
+}
