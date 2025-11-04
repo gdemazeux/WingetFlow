@@ -114,7 +114,7 @@ namespace Flow.Launcher.Plugin.WingetFlow
 
                 if (app.IsUpgradable) 
                 { 
-                    title = $"{app.Name} | New version Available"; 
+                    title = $"{app.Name} | New version available"; 
                     subTitle = $"ID: {app.Id} | Version: {app.CurrentVersion} -> {app.Version} | Source: {app.Source}"; 
                     icoPath = "Images\\upload.png"; }
                 else if (app.IsAlreadyInstall) 
@@ -156,7 +156,7 @@ namespace Flow.Launcher.Plugin.WingetFlow
             try
             {
                 _isInstalling = true;
-                _currentInstallation = $"{op.ProgressMessage} de {packageName}...";
+                _currentInstallation = $"{op.ProgressMessage} {packageName}...";
 
                 _context.API.ChangeQuery(_context.CurrentPluginMetadata.ActionKeyword + " ", true);
 
@@ -178,7 +178,7 @@ namespace Flow.Launcher.Plugin.WingetFlow
 
         private OperationInfo GetOperationInfo(bool isUpgrade) => isUpgrade
             ? new("Update", "upgrade", "successfully updated", "Update")
-            : new("Installation", "install", "was successfully installed", "Installation");
+            : new("Installation", "install", "was successfully installed", "Installing");
 
         private async Task InstallPackage(string packageId, string packageName)
             => await ExecutePackageOperation(packageId, packageName, isUpgrade: false);
@@ -195,9 +195,9 @@ namespace Flow.Launcher.Plugin.WingetFlow
             {
                 new Result
                 {
-                    Title = "Installation in progress...",
+                    Title = "Installing...",
                     SubTitle = _currentInstallation,
-                    IcoPath = "Images\\error.png",
+                    IcoPath = "Images\\download.png",
                 }
             };
         }
@@ -208,8 +208,8 @@ namespace Flow.Launcher.Plugin.WingetFlow
             {
                 new Result
                 {
-                    Title = "Start typing to search for packages",
-                    SubTitle = "Minimum 2 characters",
+                    Title = "Type to search for packages",
+                    SubTitle = "At least 2 characters",
                     IcoPath = "Images\\search.png",
                 }
             };
