@@ -1,6 +1,6 @@
 {
-  "ID": "E5A9A70E28DC4AB08F921C4D026C97E0",
-  "ActionKeyword": "wg",
+  "ID": "DF2EFA222C4A46F586FBBE815885D306",
+  "ActionKeyword": "wget",
   "Name": "WingetFlow",
   "Description": "A plugin to install and update packages with Winget",
   "Author": "gdemazeux",
