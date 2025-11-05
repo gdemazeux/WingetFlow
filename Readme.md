@@ -9,3 +9,5 @@ With this plugin, you can search, install, or upgrade applications using the Win
     wget <your search>
 
 The search can be performed using the package name or ID.
+
+![preview](demo.png)
