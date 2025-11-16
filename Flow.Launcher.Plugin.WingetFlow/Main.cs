@@ -1,133 +1,99 @@
-using Flow.Launcher.Plugin.WingetFlow.Helpers;
+using Flow.Launcher.Plugin.WingetFlow.Enums;
 using Flow.Launcher.Plugin.WingetFlow.Models;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using WGetNET;
 
 namespace Flow.Launcher.Plugin.WingetFlow
 {
-    public class WingetFlow : IAsyncPlugin
+    public class WingetFlow : IAsyncPlugin, IContextMenu
     {
         private PluginInitContext _context;
-        private CancellationTokenSource _debounceCts;
-        private const int DebounceDelayMs = 1000;
-        private bool _isInstalling;
-        private string _currentInstallation;
+        private WinGetPackageManager _packageManager;
+        private Dictionary<string, WinGetPackage> _localMap;
 
         public Task InitAsync(PluginInitContext context)
         {
             _context = context;
+            _packageManager = new WinGetPackageManager();
+
             return Task.CompletedTask;
         }
 
         public async Task<List<Result>> QueryAsync(Query query, CancellationToken token)
         {
-            if (_isInstalling)
-                return BuildInstallationResult();
-
-            var linkedCts = await HandleDebounce(token);
-            if (linkedCts == null)
-                return new List<Result>();
 
             var search = query.Search.Trim();
 
-            if (string.IsNullOrWhiteSpace(search) || search.Length < 2)
+            if (string.IsNullOrWhiteSpace(search) || search.Length <= 2)
                 return BuildPromptResult();
 
             try
             {
-                var apps = await GetPackagesFromWinget(search, linkedCts.Token);
+                var apps = await GetPackagesFromWinget(search, token);
 
                 if (apps.Count == 0)
                     return BuildNoResult(search);
 
                 return BuildResultsList(apps);
             }
-            catch (TaskCanceledException)
+            catch (Exception)
             {
-                return new List<Result>();
+                return [];
             }
         }
 
-        private async Task<CancellationTokenSource> HandleDebounce(CancellationToken token)
+        private async Task<List<WinGetPackage>> GetPackagesFromWinget(string search, CancellationToken token)
         {
-            _debounceCts?.Cancel();
-            _debounceCts = new CancellationTokenSource();
-
-            var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, _debounceCts.Token);
-
-            try
-            {
-                await Task.Delay(DebounceDelayMs, linkedCts.Token);
-                return linkedCts;
-            }
-            catch (TaskCanceledException)
-            {
-                return null;
-            }
-        }
-
-        private async Task<List<PackageWinget>> GetPackagesFromWinget(string search, CancellationToken token)
-        {
-            var searchCommand = $"winget search \"{search}\"";
-            var listCommand = "winget list";
-
-            Task<string> searchTask = WingetCommandHelper.Execute(searchCommand, token);
-            Task<string> localTask = WingetCommandHelper.Execute(listCommand, token);
+            var searchTask = _packageManager.SearchPackageAsync(search, cancellationToken: token);
+            var localTask = _packageManager.GetInstalledPackagesAsync(cancellationToken: token);
 
             await Task.WhenAll(searchTask, localTask);
 
-            List<PackageWinget> searchApps = ParserHelper.ParseSearch(searchTask.Result);
-            List<LocalPackageWinget> localApps = ParserHelper.ParseLocal(localTask.Result);
+            List<WinGetPackage> searchApps = await searchTask;
+            List<WinGetPackage> localApps = await localTask;
 
-            var localeMap = localApps
-                .GroupBy(u => u.Id, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-
-            foreach (var app in searchApps)
-            {
-                if (localeMap.TryGetValue(app.Id, out var upgrade))
-                {
-                    app.IsAlreadyInstall = true;
-                    app.IsUpgradable = !string.IsNullOrEmpty(upgrade.Available);
-                    app.CurrentVersion = upgrade.Version;
-                }
-            }
+            _localMap = localApps
+                .DistinctBy(app => app.Id, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(app => app.Id, StringComparer.OrdinalIgnoreCase);
 
             return searchApps
-                .OrderByDescending(a => a.IsAlreadyInstall)
-                .ThenBy(a => a.IsUpgradable)
+                .Select(app => _localMap.TryGetValue(app.Id, out var localApp) ? localApp : app)
+                .OrderByDescending(a => _localMap.ContainsKey(a.Id))
+                .ThenByDescending(a => a.HasUpgrade)
                 .ToList();
         }
 
-        private List<Result> BuildResultsList(List<PackageWinget> apps)
+        private List<Result> BuildResultsList(List<WinGetPackage> apps)
         {
             var results = new List<Result>();
 
             foreach (var app in apps)
             {
-                string title = ""; 
-                string subTitle = ""; 
-                string icoPath = ""; 
+                string title;
+                string subTitle;
+                string icoPath;
 
-                if (app.IsUpgradable) 
-                { 
-                    title = $"{app.Name} | New version available"; 
-                    subTitle = $"ID: {app.Id} | Version: {app.CurrentVersion} -> {app.Version} | Source: {app.Source}"; 
-                    icoPath = "Images\\upload.png"; }
-                else if (app.IsAlreadyInstall) 
-                { 
-                    title = $"{app.Name} | Installed"; 
-                    subTitle = $"ID: {app.Id} | Version: {app.CurrentVersion} | Source: {app.Source}"; 
-                    icoPath = "Images\\success.png"; 
+                if (app.HasUpgrade)
+                {
+                    title = $"{app.Name} | New version available";
+                    subTitle = $"ID: {app.Id} | Version: {app.VersionString} -> {app.AvailableVersionString} | Source: {app.SourceName}";
+                    icoPath = "Images\\upload.png";
+                }
+                else if (_localMap.ContainsKey(app.Id))
+                {
+                    title = $"{app.Name} | Installed";
+                    subTitle = $"ID: {app.Id} | Version: {app.VersionString} | Source: {app.SourceName}";
+                    icoPath = "Images\\success.png";
                 }
                 else
-                { 
-                    title = $"{app.Name}"; 
-                    subTitle = $"ID: {app.Id} | Version: {app.Version} | Source: {app.Source}"; 
-                    icoPath = "Images\\download.png"; 
+                {
+                    title = $"{app.Name}";
+                    subTitle = $"ID: {app.Id} | Version: {app.VersionString} | Source: {app.SourceName}";
+                    icoPath = "Images\\download.png";
                 }
 
                 results.Add(new Result
@@ -135,14 +101,17 @@ namespace Flow.Launcher.Plugin.WingetFlow
                     Title = title,
                     SubTitle = subTitle,
                     IcoPath = icoPath,
+                    ContextData = app,
                     Action = _ =>
                     {
-                        if (app.IsUpgradable)
-                            Task.Run(() => UpgradePackage(app.Id, app.Name));
-                        else if (!app.IsAlreadyInstall)
-                            Task.Run(() => InstallPackage(app.Id, app.Name));
+                        if (app.HasUpgrade)
+                            Task.Run(() => ExecutePackageOperation(app.Id, app.Name, WingetOperationEnum.Upgrade));
+                        else if (!_localMap.ContainsKey(app.Id))
+                            Task.Run(() => ExecutePackageOperation(app.Id, app.Name, WingetOperationEnum.Install));
+                        else
+                            Task.Run(() => ExecutePackageOperation(app.Id, app.Name, WingetOperationEnum.Uninstall));
 
-                        return false;
+                        return true;
                     }
                 });
             }
@@ -150,82 +119,130 @@ namespace Flow.Launcher.Plugin.WingetFlow
             return results;
         }
 
-        private async Task ExecutePackageOperation(string packageId, string packageName, bool isUpgrade)
+        public List<Result> LoadContextMenus(Result selectedResult)
         {
-            var op = GetOperationInfo(isUpgrade);
+            var app = selectedResult.ContextData as WinGetPackage;
+            var menus = new List<Result>();
+
+            if (app is null)
+                return menus;
+
+            if (app.HasUpgrade)
+            {
+                menus.Add(new Result
+                {
+                    Title = "Update",
+                    SubTitle = $"Update to {app.AvailableVersionString}",
+                    IcoPath = "Images\\upload.png",
+                    Action = _ =>
+                    {
+                        Task.Run(() => ExecutePackageOperation(app.Id, app.Name, WingetOperationEnum.Upgrade));
+                        return true;
+                    }
+                });
+            }
+
+            if (!_localMap.ContainsKey(app.Id))
+            {
+                menus.Add(new Result
+                {
+                    Title = "Install",
+                    SubTitle = $"Install {app.Name}",
+                    IcoPath = "Images\\download.png",
+                    Action = _ =>
+                    {
+                        Task.Run(() => ExecutePackageOperation(app.Id, app.Name, WingetOperationEnum.Install));
+                        return true;
+                    }
+                });
+            }
+            else
+            {
+                menus.Add(new Result
+                {
+                    Title = "Uninstall",
+                    SubTitle = $"Uninstall {app.Name}",
+                    IcoPath = "Images\\delete.png",
+                    Action = _ =>
+                    {
+                        Task.Run(() => ExecutePackageOperation(app.Id, app.Name, WingetOperationEnum.Uninstall));
+                        return true;
+                    }
+                });
+            }
+
+            return menus;
+        }
+
+        private async Task ExecutePackageOperation(string packageId, string packageName, WingetOperationEnum operation)
+        {
+            var op = GetOperationInfo(operation);
+
             try
             {
-                _isInstalling = true;
-                _currentInstallation = $"{op.ProgressMessage} {packageName}...";
-
+                _context.API.BackToQueryResults();
                 _context.API.ChangeQuery(_context.CurrentPluginMetadata.ActionKeyword + " ", true);
+                _context.API.ShowMsg($"{op.Verb} started", $"{packageName}", GetIconPath("start"));
 
-                var command = $"winget {op.Command} --id \"{packageId}\" --silent --accept-source-agreements --accept-package-agreements";
-                await WingetCommandHelper.Execute(command);
+                var result = operation switch
+                {
+                    WingetOperationEnum.Install => await _packageManager.InstallPackageAsync(packageId, true),
+                    WingetOperationEnum.Uninstall => await _packageManager.UninstallPackageAsync(packageId, true),
+                    WingetOperationEnum.Upgrade => await _packageManager.UpgradePackageAsync(packageId, true),
+                    _ => throw new ArgumentOutOfRangeException(nameof(operation), "Invalid operation"),
+                };
 
-                _context.API.ShowMsg($"{op.Verb} complete", $"{packageName} {op.SuccessMessage}", GetIconPath("success"));
+                if (result)
+                    _context.API.ShowMsg($"{op.Verb} complete", $"{packageName} {op.SuccessMessage}", GetIconPath("success"));
+                else
+                    _context.API.ShowMsg($"{op.Verb} cancelled", $"{op.Verb} could not be completed for {packageName}", GetIconPath("error"));
             }
             catch (Exception ex)
             {
-                _context.API.ShowMsg($"Error {op.Verb.ToLower()}", $"Update failed {op.Verb.ToLower()} for {packageName}: {ex.Message}", GetIconPath("error"));
+                _context.API.ShowMsg($"Error {op.Verb.ToLower()}", $"{op.Verb.ToLower()} failed for {packageName}: {ex.Message}", GetIconPath("error"));
             }
             finally
             {
-                _isInstalling = false;
                 _context.API.ChangeQuery("", true);
             }
         }
 
-        private OperationInfo GetOperationInfo(bool isUpgrade) => isUpgrade
-            ? new("Update", "upgrade", "successfully updated", "Update")
-            : new("Installation", "install", "was successfully installed", "Installing");
-
-        private async Task InstallPackage(string packageId, string packageName)
-            => await ExecutePackageOperation(packageId, packageName, isUpgrade: false);
-
-        private async Task UpgradePackage(string packageId, string packageName)
-            => await ExecutePackageOperation(packageId, packageName, isUpgrade: true);
-
-        private string GetIconPath(string iconName)
-            => System.IO.Path.Combine(_context.CurrentPluginMetadata.PluginDirectory, "Images", $"{iconName}.png");
-
-        private List<Result> BuildInstallationResult()
+        private OperationInfo GetOperationInfo(WingetOperationEnum operation)
         {
-            return new List<Result>
+            return operation switch
             {
-                new Result
-                {
-                    Title = "Installing...",
-                    SubTitle = _currentInstallation,
-                    IcoPath = "Images\\download.png",
-                }
+                WingetOperationEnum.Install => new("Installation", "was successfully installed", "Installing"),
+                WingetOperationEnum.Uninstall => new("Uninstallation", "was successfully uninstalled", "Uninstalling"),
+                WingetOperationEnum.Upgrade => new("Update", "was successfully updated", "Updating"),
+                _ => throw new ArgumentOutOfRangeException(nameof(operation), "Invalid operation"),
             };
         }
 
+        private string GetIconPath(string iconName) =>
+            System.IO.Path.Combine(_context.CurrentPluginMetadata.PluginDirectory, "Images", $"{iconName}.png");
+
         private List<Result> BuildPromptResult()
         {
-            return new List<Result>
-            {
+            return [
                 new Result
                 {
-                    Title = "Type to search for packages",
-                    SubTitle = "At least 2 characters",
+                    Title = "Type to search winget packages",
+                    SubTitle = "At least 3 characters",
                     IcoPath = "Images\\search.png",
                 }
-            };
+            ];
         }
 
         private List<Result> BuildNoResult(string search)
         {
-            return new List<Result>
-            {
+            return [
                 new Result
                 {
                     Title = "No packages found",
                     SubTitle = $"No results found for \"{search}\"",
                     IcoPath = "Images\\search.png",
                 }
-            };
+            ];
         }
     }
 }
