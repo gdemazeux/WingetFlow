@@ -2,7 +2,7 @@
   "ID": "DF2EFA222C4A46F586FBBE815885D306",
   "ActionKeyword": "wget",
   "Name": "WingetFlow",
-  "Description": "A plugin to search, update, install and uninstall packages with Winget",
+  "Description": "Search, update, install and uninstall packages with Winget",
   "Author": "gdemazeux",
   "Version": "1.1.0",
   "Language": "csharp",
